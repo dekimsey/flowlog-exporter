@@ -1,4 +1,4 @@
-package main
+package main // import "github.com/nutmegdevelopment/flowlog-exporter"
 
 import (
 	"bytes"

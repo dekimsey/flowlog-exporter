@@ -1,0 +1,22 @@
+id: /flowlog-exporter
+cpus: 0.01
+mem: 128.0
+instances: 1
+args: [
+    "-shards",
+    "{{shards}}",
+    "-stream",
+    "{{stream}}"
+    ]
+env:
+    AWS_ACCESS_KEY: {{access_key}}
+    AWS_SECRET_KEY: {{secret_key}}
+container:
+  docker:
+    image: {{registry}}/flowlog-exporter:{{version}}
+    parameters:
+      -
+        key: label
+        value: APP_NAME=flowlog-exporter
+labels:
+  tags: monitor

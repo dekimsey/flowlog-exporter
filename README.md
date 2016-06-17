@@ -21,6 +21,21 @@ Once done, and equipped with an AWS key pair above, simply start the exporter.
 AWS credentials should be provided in the environment variables ```AWS_ACCESS_KEY``` and ```AWS_SECRET_KEY```.
 Set the arguments ```-stream``` and ```-shards``` to match your kinesis configuration.
 
+## Building the docker image
+
+This image builds with centurylink-builder, to generate a very small (~ 12MB) image.  To make this process user-friendly, a Makefile is provided.
+There are various variables that you can override to customise this (see the Makefile for details, it's very simple), but the primary one is ```DOCKERREPO``` which specifies  which repsoitory to build for. 
+
+Build:
+```
+DOCKERREPO=mycompany make 
+```
+
+Push:
+```
+DOCKERREPO=mycompany make push
+```
+
 ## Limitations
 
 Because this uses labels to expose data, data aggregation is done on a per-subnet level (having a label for each IP would place excessive load on the server).
