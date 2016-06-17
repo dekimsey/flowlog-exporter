@@ -26,13 +26,17 @@ var (
 	awsSession *session.Session
 	getSize    int64 = 256
 	shards     int
+	streamName string
+	port       string
 	subnets    Subnets
 	metrics    Metrics
 )
 
 func init() {
 	awsSession = session.New()
-	flag.IntVar(&shards, "shards", 1, "Shard count")
+	flag.IntVar(&shards, "shards", 1, "Kinesis shard count")
+	flag.StringVar(&streamName, "stream", "", "Kinesis stream name")
+	flag.StringVar(&port, "port", "8080", "TCP port to listen on (defaults to 8080)")
 	debug := flag.Bool("debug", false, "Turn on debug mode (warning: very verbose)")
 	flag.Parse()
 
@@ -142,6 +146,7 @@ func Decompress(in <-chan []byte, out chan<- []byte) {
 		}
 		out <- buf
 	}
+	close(out)
 }
 
 // Decode parses JSON data from in into FlowLogEvents.
@@ -156,6 +161,7 @@ func Decode(in <-chan []byte, out chan<- FlowLogEvent) {
 
 		out <- buf
 	}
+	close(out)
 }
 
 func getShardIterator(shardID string) (*kinesis.GetShardIteratorOutput, error) {
@@ -164,7 +170,7 @@ func getShardIterator(shardID string) (*kinesis.GetShardIteratorOutput, error) {
 	params := &kinesis.GetShardIteratorInput{
 		ShardId:           aws.String(shardID),
 		ShardIteratorType: aws.String("TRIM_HORIZON"),
-		StreamName:        aws.String("network-logs"),
+		StreamName:        aws.String(streamName),
 	}
 	return svc.GetShardIterator(params)
 }
@@ -402,7 +408,7 @@ func (m *Metrics) RegisterAndServe() {
 	log.Debug("Starting webserver")
 
 	http.Handle("/metrics", prometheus.Handler())
-	http.ListenAndServe(":8080", nil)
+	http.ListenAndServe(":"+port, nil)
 }
 
 func main() {
