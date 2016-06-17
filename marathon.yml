@@ -14,9 +14,20 @@ env:
 container:
   docker:
     image: {{registry}}/flowlog-exporter:{{version}}
+    portMappings:
+      - containerPort: 8080
     parameters:
       -
         key: label
         value: APP_NAME=flowlog-exporter
+healthChecks:
+  -
+    protocol: HTTP
+    path: /health
+    portIndex: 0
+    gracePeriodSeconds: 600
+    intervalSeconds: 15
+    timeoutSeconds: 5
+    maxConsecutiveFailures: 10
 labels:
   tags: monitor
