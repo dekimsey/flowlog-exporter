@@ -33,13 +33,15 @@ var (
 )
 
 func init() {
-	awsSession = session.New()
+
 	flag.IntVar(&shards, "shards", 1, "Kinesis shard count")
 	flag.StringVar(&streamName, "stream", "", "Kinesis stream name")
 	flag.StringVar(&port, "port", "8080", "TCP port to listen on (defaults to 8080)")
-	debug := flag.Bool("debug", false, "Turn on debug mode (warning: very verbose)")
+	region := flag.String("region", "eu-west-1", "Set AWS region")
+	debug := flag.Bool("debug", false, "Turn on debug mode")
 	flag.Parse()
 
+	awsSession = session.New(&aws.Config{Region: region})
 	if *debug {
 		log.SetLevel(log.DebugLevel)
 	}
@@ -299,15 +301,11 @@ func (f FlowLogEvent) ProcessFlowLog() error {
 		}
 
 		if srcNet, ok := subnets.Lookup(msg.Src); ok {
-			log.Debugf("Src (%s) is in local subnet %s\n", msg.Src.String(), srcNet)
 			metrics.SubnetPktsOut.WithLabelValues(srcNet).Add(msg.Packets)
 			metrics.SubnetBytesOut.WithLabelValues(srcNet).Add(msg.Bytes)
-		} else {
-			log.Debugf("Src (%s) is non-local\n", msg.Src.String())
 		}
 
 		if dstNet, ok := subnets.Lookup(msg.Dst); ok {
-			log.Debugf("Dst (%s) is in local subnet %s\n", msg.Dst.String(), dstNet)
 			metrics.SubnetPktsIn.WithLabelValues(dstNet).Add(msg.Packets)
 			metrics.SubnetBytesIn.WithLabelValues(dstNet).Add(msg.Bytes)
 
@@ -316,8 +314,6 @@ func (f FlowLogEvent) ProcessFlowLog() error {
 			} else {
 				metrics.SubnetDenies.WithLabelValues(dstNet).Add(msg.Packets)
 			}
-		} else {
-			log.Debugf("Dst (%s) is non-local\n", msg.Dst.String())
 		}
 	}
 	return nil
@@ -446,7 +442,7 @@ func main() {
 	for msg := range logChan {
 		err = msg.ProcessFlowLog()
 		if err != nil {
-			log.Error(err)
+			log.Debug(err)
 		}
 	}
 

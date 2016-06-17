@@ -12,7 +12,7 @@ build:
 	$(DOCKER) run --rm \
 		--privileged \
 		-v $(WORKDIR):/src \
-		-e CGO_ENABLED=true \
+		-e CGO_ENABLED=0 \
 		-e LDFLAGS='-s -extldflags -static' \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		centurylink/golang-builder \

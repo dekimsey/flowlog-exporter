@@ -6,7 +6,7 @@ args: [
     "-shards",
     "{{shards}}",
     "-stream",
-    "{{stream}}"
+    "{{stream}}",
     ]
 env:
     AWS_ACCESS_KEY: {{access_key}}
