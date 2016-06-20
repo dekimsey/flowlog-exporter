@@ -295,6 +295,7 @@ type FlowLogEvent struct {
 	SubscriptionFilters []string `json:"subscriptionFilters"`
 }
 
+// ProcessFlowLog parses a flowlog message and sets metrics.
 func (f FlowLogEvent) ProcessFlowLog() error {
 	for i := range f.LogEvents {
 		metrics.FlowEvents.Inc()
