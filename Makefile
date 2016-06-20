@@ -6,7 +6,10 @@ DOCKERTAG ?= latest
 DOCKERREPO ?= localhost
 APPNAME = flowlog-exporter
 WORKDIR ?= $(CURDIR)
+BENCHTIME ?= 1s
 
+test:
+	go test -run=. -bench=. -benchmem -benchtime $(BENCHTIME)
 
 build:
 	$(DOCKER) run --rm \

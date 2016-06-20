@@ -2,10 +2,11 @@ package main // import "github.com/nutmegdevelopment/flowlog-exporter"
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"flag"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -18,7 +19,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/kinesis"
-	"github.com/klauspost/compress/gzip"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -133,15 +133,9 @@ func Stream(id int, out chan<- []byte) {
 }
 
 // Decompress expands the raw data from in, and passes it to out.
-func Decompress(in <-chan []byte, out chan<- []byte) {
+func Decompress(in <-chan []byte, out chan<- io.Reader) {
 	for src := range in {
-		r, err := gzip.NewReader(bytes.NewReader(src))
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-
-		buf, err := ioutil.ReadAll(r)
+		buf, err := decompress(src)
 		if err != nil {
 			log.Error(err)
 			continue
@@ -151,19 +145,27 @@ func Decompress(in <-chan []byte, out chan<- []byte) {
 	close(out)
 }
 
+func decompress(in []byte) (io.Reader, error) {
+	return gzip.NewReader(bytes.NewReader(in))
+}
+
 // Decode parses JSON data from in into FlowLogEvents.
-func Decode(in <-chan []byte, out chan<- FlowLogEvent) {
+func Decode(in <-chan io.Reader, out chan<- FlowLogEvent) {
 	for src := range in {
-		var buf FlowLogEvent
-		err := json.Unmarshal(src, &buf)
+		buf, err := decode(src)
 		if err != nil {
 			log.Error(err)
 			continue
 		}
-
 		out <- buf
 	}
 	close(out)
+}
+
+func decode(in io.Reader) (FlowLogEvent, error) {
+	var buf FlowLogEvent
+	err := json.NewDecoder(in).Decode(&buf)
+	return buf, err
 }
 
 func getShardIterator(shardID string) (*kinesis.GetShardIteratorOutput, error) {
@@ -427,7 +429,7 @@ func main() {
 	}()
 
 	gzipChan := make(chan []byte, getSize*int64(shards))
-	decodeChan := make(chan []byte)
+	decodeChan := make(chan io.Reader)
 	logChan := make(chan FlowLogEvent)
 
 	go Decode(decodeChan, logChan)
