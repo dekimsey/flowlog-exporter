@@ -7,7 +7,7 @@ This exports Amazon EC2 flowlogs to prometheus.
 Processing the EC2 flowlogs means you can monitor the traffic entering and leaving your subnets, and monitor accepted and deined traffic.
 This also gives you a (very) simplistic IDS capability, as you can track spikes in rejected flows as potentially suspicious network activity.
 
-## What do I need to do to make this work?
+## Setup and running
 
 First enable flow logs for your VPC(s), as described here:
 http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/flow-logs.html
@@ -18,8 +18,10 @@ http://docs.aws.amazon.com/AmazonCloudWatch/latest/DeveloperGuide/Subscriptions.
 Now create an IAM keypair that can read the kinesis stream and has permissions to list all subnets in your VPC(s).
 
 Once done, and equipped with an AWS key pair above, simply start the exporter.
-AWS credentials should be provided in the environment variables ```AWS_ACCESS_KEY``` and ```AWS_SECRET_KEY```.
+AWS credentials should be provided in the environment variables ```AWS_ACCESS_KEY``` and ```AWS_SECRET_KEY```.  You may also need to specify the AWS region, either via environment variables or via ```-region```.
 Set the arguments ```-stream``` and ```-shards``` to match your kinesis configuration.
+
+As data is aggregated per subnet, individual denials are not explorable in prometheus.  Therefore, a ```-log_deny``` option exists, which will log each individual denials, with protocol, port and IP data, for collection and processing in your log platform.
 
 ## Building the docker image
 

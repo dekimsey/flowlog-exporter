@@ -28,6 +28,7 @@ var (
 	shards     int
 	streamName string
 	port       string
+	logDeny    bool
 	subnets    Subnets
 	metrics    Metrics
 )
@@ -37,6 +38,7 @@ func init() {
 	flag.IntVar(&shards, "shards", 1, "Kinesis shard count")
 	flag.StringVar(&streamName, "stream", "", "Kinesis stream name")
 	flag.StringVar(&port, "port", "8080", "TCP port to listen on (defaults to 8080)")
+	flag.BoolVar(&logDeny, "log_deny", false, "Log denied packets")
 	region := flag.String("region", "eu-west-1", "Set AWS region")
 	debug := flag.Bool("debug", false, "Turn on debug mode")
 	flag.Parse()
@@ -300,6 +302,19 @@ func (f FlowLogEvent) ProcessFlowLog() error {
 		msg, err := ParseMessage(f.LogEvents[i].Message)
 		if err != nil {
 			return err
+		}
+
+		if logDeny {
+			log.Printf(
+				"POLICY_DENIED: src:%s dst:%s srcport:%d dstport:%d proto:%s packets:%.0f tstamp:%d\n",
+				msg.Src.String(),
+				msg.Dst.String(),
+				msg.SrcPort,
+				msg.DstPort,
+				msg.Protocol,
+				msg.Packets,
+				f.LogEvents[i].Timestamp,
+			)
 		}
 
 		if srcNet, ok := subnets.Lookup(msg.Src); ok {

@@ -7,6 +7,7 @@ args: [
     "{{shards}}",
     "-stream",
     "{{stream}}",
+    "-log_deny"
     ]
 env:
     AWS_ACCESS_KEY: {{access_key}}
