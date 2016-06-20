@@ -304,7 +304,7 @@ func (f FlowLogEvent) ProcessFlowLog() error {
 			return err
 		}
 
-		if logDeny {
+		if logDeny && !msg.Accepted {
 			log.Printf(
 				"POLICY_DENIED: src:%s dst:%s srcport:%d dstport:%d proto:%s packets:%.0f tstamp:%d\n",
 				msg.Src.String(),
