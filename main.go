@@ -277,6 +277,7 @@ var protocols = map[string]string{
 	"2":  "IGMP",
 	"6":  "TCP",
 	"17": "UDP",
+	"41": "IPv6",
 	"58": "IPV6-ICMP",
 }
 
