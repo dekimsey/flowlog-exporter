@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -20,14 +21,20 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/kinesis"
 	"github.com/prometheus/client_golang/prometheus"
+	"gopkg.in/olivere/elastic.v2"
 )
+
+const esType = "flowlog_denials"
 
 var (
 	awsSession *session.Session
+	esClient   *elastic.Client
 	getSize    int64 = 256
 	shards     int
 	streamName string
 	port       string
+	esURL      string
+	esIndex    string
 	logDeny    bool
 	subnets    Subnets
 	metrics    Metrics
@@ -40,6 +47,9 @@ func init() {
 	flag.StringVar(&port, "port", "8080", "TCP port to listen on (defaults to 8080)")
 	flag.BoolVar(&logDeny, "log_deny", false, "Log denied packets")
 	region := flag.String("region", "eu-west-1", "Set AWS region")
+	flag.StringVar(&esURL, "es_url", "", "If specified, sends the log_deny data to this elasticsearch endpoint")
+	flag.StringVar(&esIndex, "es_index", "", "If using elasticsearch output, specifies the index name")
+
 	debug := flag.Bool("debug", false, "Turn on debug mode")
 	flag.Parse()
 
@@ -47,6 +57,11 @@ func init() {
 	if *debug {
 		log.SetLevel(log.DebugLevel)
 	}
+}
+
+func esIndexName() string {
+	t := time.Now()
+	return fmt.Sprintf("%s-%s", esClient, t.Format("2006-01-02"))
 }
 
 // Subnets is a list of all available AWS subnets that we have access to.
@@ -84,7 +99,7 @@ func (s *Subnets) Get() error {
 			return err
 		}
 		subnetList = append(subnetList, cidr)
-		log.Debugf("Registered local subnet: %s\n", cidr.String())
+		log.Debugf("Registered local subnet: %s", cidr.String())
 	}
 	s.networks = subnetList
 	return nil
@@ -107,7 +122,7 @@ func (s *Subnets) Lookup(ip net.IP) (string, bool) {
 func Stream(id int, out chan<- []byte) {
 	shardID := strconv.Itoa(id)
 
-	log.Debugf("Starting stream reader on shard %s\n", shardID)
+	log.Debugf("Starting stream reader on shard %s", shardID)
 
 	shard, err := getShardIterator(shardID)
 	if err != nil {
@@ -216,15 +231,45 @@ log-status	The logging status of the flow log:
 
 // FlowMessage describes some of the fields exported in flow logs.  See above for full format description.
 type FlowMessage struct {
-	Src      net.IP
-	Dst      net.IP
-	SrcPort  int
-	DstPort  int
-	Protocol string
-	Packets  float64
-	Bytes    float64
-	Accepted bool
+	Src       net.IP
+	Dst       net.IP
+	SrcPort   int
+	DstPort   int
+	Protocol  string
+	Packets   float64
+	Bytes     float64
+	Accepted  bool
+	Timestamp time.Time
 }
+
+// MessageMapping is the elasticsearch mapping for a FlowMessage.
+var MessageMapping = `
+{
+	"properties": {
+		"src": {
+			"type": "ip"
+		},
+		"dst": {
+			"type": "ip"
+		},
+		"srcport": {
+			"type": "short"
+		},
+		"dstport": {
+			"type": "short"
+		},
+		"protocol": {
+			"type": "string"
+		},
+		"packets": {
+			"type": "double"
+		},
+		"timestamp": {
+			"type": "date"
+		}
+	}
+}
+`
 
 var protocols = map[string]string{
 	"1":  "ICMP",
@@ -239,12 +284,12 @@ func ParseMessage(message string) (f FlowMessage, err error) {
 	arr := strings.Split(message, " ")
 
 	if len(arr) != 14 {
-		log.Debugf("Message: %s has %d terms\n", message, len(arr))
+		log.Debugf("Message: %s has %d terms", message, len(arr))
 		return f, errors.New("Bad record length")
 	}
 
 	if arr[13] != "OK" {
-		log.Debugf("Message status is %s\n", arr[13])
+		log.Debugf("Message status is %s", arr[13])
 		return f, errors.New("Incomplete record")
 	}
 
@@ -274,6 +319,12 @@ func ParseMessage(message string) (f FlowMessage, err error) {
 		return
 	}
 
+	unix, err := strconv.ParseInt(arr[10], 10, 64)
+	if err != nil {
+		return
+	}
+	f.Timestamp = time.Unix(unix, 0)
+
 	if arr[12] == "ACCEPT" {
 		f.Accepted = true
 	}
@@ -296,7 +347,7 @@ type FlowLogEvent struct {
 }
 
 // ProcessFlowLog parses a flowlog message and sets metrics.
-func (f FlowLogEvent) ProcessFlowLog() error {
+func (f FlowLogEvent) ProcessFlowLog(denyLogChan chan<- FlowMessage) error {
 	for i := range f.LogEvents {
 		metrics.FlowEvents.Inc()
 
@@ -305,36 +356,100 @@ func (f FlowLogEvent) ProcessFlowLog() error {
 			return err
 		}
 
-		if logDeny && !msg.Accepted {
+		if logDeny {
+			go func() {
+				denyLogChan <- msg
+			}()
+		} else {
+			close(denyLogChan)
+		}
+
+		if srcNet, ok := subnets.Lookup(msg.Src); ok {
+
+			metrics.SubnetPktsOut.WithLabelValues(srcNet).
+				Add(msg.Packets)
+
+			metrics.SubnetBytesOut.WithLabelValues(srcNet).
+				Add(msg.Bytes)
+
+		}
+
+		if dstNet, ok := subnets.Lookup(msg.Dst); ok {
+			metrics.SubnetPktsIn.WithLabelValues(dstNet).
+				Add(msg.Packets)
+
+			metrics.SubnetBytesIn.WithLabelValues(dstNet).
+				Add(msg.Bytes)
+
+			if msg.Accepted {
+
+				metrics.SubnetAccepts.WithLabelValues(dstNet).
+					Add(msg.Packets)
+
+			} else {
+
+				metrics.SubnetDenies.WithLabelValues(dstNet).
+					Add(msg.Packets)
+
+			}
+		}
+	}
+	return nil
+}
+
+// Log denied flows.
+func Log(denyLogChan <-chan FlowMessage) {
+
+	if !logDeny {
+		return
+	}
+
+	bulk := esClient.Bulk()
+
+	for msg := range denyLogChan {
+
+		if msg.Accepted {
+			// Don't log accepted packets
+			continue
+		}
+
+		if esClient == nil {
+			// No ES server, just log to stdout
 			log.Printf(
-				"POLICY_DENIED: src:%s dst:%s srcport:%d dstport:%d proto:%s packets:%.0f tstamp:%d\n",
+				"POLICY_DENIED: src:%s dst:%s srcport:%d dstport:%d proto:%s packets:%.0f timestamp:%s",
 				msg.Src.String(),
 				msg.Dst.String(),
 				msg.SrcPort,
 				msg.DstPort,
 				msg.Protocol,
 				msg.Packets,
-				f.LogEvents[i].Timestamp,
+				msg.Timestamp.String(),
 			)
+			continue
 		}
 
-		if srcNet, ok := subnets.Lookup(msg.Src); ok {
-			metrics.SubnetPktsOut.WithLabelValues(srcNet).Add(msg.Packets)
-			metrics.SubnetBytesOut.WithLabelValues(srcNet).Add(msg.Bytes)
-		}
+		bulk = bulk.Add(
+			elastic.NewBulkIndexRequest().
+				Doc(msg).
+				Type(esType).
+				Index(esIndex),
+		)
 
-		if dstNet, ok := subnets.Lookup(msg.Dst); ok {
-			metrics.SubnetPktsIn.WithLabelValues(dstNet).Add(msg.Packets)
-			metrics.SubnetBytesIn.WithLabelValues(dstNet).Add(msg.Bytes)
-
-			if msg.Accepted {
-				metrics.SubnetAccepts.WithLabelValues(dstNet).Add(msg.Packets)
-			} else {
-				metrics.SubnetDenies.WithLabelValues(dstNet).Add(msg.Packets)
+		if bulk.NumberOfActions() >= 5000 {
+			resp, err := bulk.Do()
+			if err != nil {
+				log.Error(err)
+				continue
 			}
+			failedItems := resp.Failed()
+			if len(failedItems) != 0 {
+				log.Debugf("Failed to insert following items into Elasticsearch: %s", failedItems)
+			}
+
 		}
+
 	}
-	return nil
+
 }
 
 // Metrics contains prometheus metrics
@@ -433,6 +548,41 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if esURL != "" {
+
+		log.Debugf("Connecting to Elasticsearch at %s", esURL)
+		esClient, err = elastic.NewClient(
+			elastic.SetURL(esURL),
+			elastic.SetSniff(false),
+		)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Debug("Connected")
+		exists, err := esClient.IndexExists(esIndex).Do()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if !exists {
+			log.Debug("Index is missing, creating index")
+			_, err := esClient.CreateIndex(esIndex).Do()
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Debug("Created index")
+		}
+
+		_, err = esClient.PutMapping().
+			Index(esIndex).
+			Type(esType).
+			BodyString(MessageMapping).
+			Do()
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Debug("Mappings created")
+	}
+
 	// Periodically update subnet list
 	go func() {
 		for {
@@ -447,6 +597,7 @@ func main() {
 	gzipChan := make(chan []byte, getSize*int64(shards))
 	decodeChan := make(chan io.Reader)
 	logChan := make(chan FlowLogEvent)
+	denyLogChan := make(chan FlowMessage, getSize*int64(shards))
 
 	go Decode(decodeChan, logChan)
 	go Decompress(gzipChan, decodeChan)
@@ -457,8 +608,10 @@ func main() {
 
 	go metrics.RegisterAndServe()
 
+	go Log(denyLogChan)
+
 	for msg := range logChan {
-		err = msg.ProcessFlowLog()
+		err = msg.ProcessFlowLog(denyLogChan)
 		if err != nil {
 			log.Debug(err)
 		}

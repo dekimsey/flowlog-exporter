@@ -7,7 +7,11 @@ args: [
     "{{shards}}",
     "-stream",
     "{{stream}}",
-    "-log_deny"
+    "-log_deny",
+    "-es_index",
+    "flowlogs",
+    "-es_url",
+    "{{es_server}}"
     ]
 env:
     AWS_ACCESS_KEY: {{access_key}}
