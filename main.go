@@ -27,17 +27,18 @@ import (
 const esType = "flowlog_denials"
 
 var (
-	awsSession *session.Session
-	esClient   *elastic.Client
-	getSize    int64 = 256
-	shards     int
-	streamName string
-	port       string
-	esURL      string
-	esIndex    string
-	logDeny    bool
-	subnets    Subnets
-	metrics    Metrics
+	awsSession  *session.Session
+	esClient    *elastic.Client
+	getSize     int64 = 256
+	esBatchSize       = 4096
+	shards      int
+	streamName  string
+	port        string
+	esURL       string
+	esIndex     string
+	logDeny     bool
+	subnets     Subnets
+	metrics     Metrics
 )
 
 func init() {
@@ -61,7 +62,7 @@ func init() {
 
 func esIndexName() string {
 	t := time.Now()
-	return fmt.Sprintf("%s-%s", esClient, t.Format("2006-01-02"))
+	return fmt.Sprintf("%s-%s", esIndex, t.Format("2006-01-02"))
 }
 
 // Subnets is a list of all available AWS subnets that we have access to.
@@ -231,15 +232,15 @@ log-status	The logging status of the flow log:
 
 // FlowMessage describes some of the fields exported in flow logs.  See above for full format description.
 type FlowMessage struct {
-	Src       net.IP
-	Dst       net.IP
-	SrcPort   int
-	DstPort   int
-	Protocol  string
-	Packets   float64
-	Bytes     float64
-	Accepted  bool
-	Timestamp time.Time
+	Src       net.IP    `json:"src"`
+	Dst       net.IP    `json:"dst"`
+	SrcPort   int       `json:"srcport"`
+	DstPort   int       `json:"dstport"`
+	Protocol  string    `json:"protocol"`
+	Packets   float64   `json:"packets"`
+	Bytes     float64   `json:"-"`
+	Accepted  bool      `json:"-"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // MessageMapping is the elasticsearch mapping for a FlowMessage.
@@ -253,10 +254,10 @@ var MessageMapping = `
 			"type": "ip"
 		},
 		"srcport": {
-			"type": "short"
+			"type": "integer"
 		},
 		"dstport": {
-			"type": "short"
+			"type": "integer"
 		},
 		"protocol": {
 			"type": "string"
@@ -432,10 +433,33 @@ func Log(denyLogChan <-chan FlowMessage) {
 			elastic.NewBulkIndexRequest().
 				Doc(msg).
 				Type(esType).
-				Index(esIndex),
+				Index(esIndexName()),
 		)
 
-		if bulk.NumberOfActions() >= 5000 {
+		if bulk.NumberOfActions() >= esBatchSize {
+			exists, err := esClient.IndexExists(esIndexName()).Do()
+			if err != nil {
+				log.Fatal(err)
+			}
+			if !exists {
+				log.Debug("Index is missing, creating index: ", esIndexName())
+				_, err := esClient.CreateIndex(esIndexName()).Do()
+				if err != nil {
+					log.Fatal(err)
+				}
+				log.Debug("Created index")
+
+				_, err = esClient.PutMapping().
+					Index(esIndexName()).
+					Type(esType).
+					BodyString(MessageMapping).
+					Do()
+				if err != nil {
+					log.Fatal(err)
+				}
+				log.Debug("Created mapping")
+			}
+
 			resp, err := bulk.Do()
 			if err != nil {
 				log.Error(err)
@@ -559,28 +583,6 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Debug("Connected")
-		exists, err := esClient.IndexExists(esIndex).Do()
-		if err != nil {
-			log.Fatal(err)
-		}
-		if !exists {
-			log.Debug("Index is missing, creating index")
-			_, err := esClient.CreateIndex(esIndex).Do()
-			if err != nil {
-				log.Fatal(err)
-			}
-			log.Debug("Created index")
-		}
-
-		_, err = esClient.PutMapping().
-			Index(esIndex).
-			Type(esType).
-			BodyString(MessageMapping).
-			Do()
-		if err != nil {
-			log.Fatal(err)
-		}
-		log.Debug("Mappings created")
 	}
 
 	// Periodically update subnet list
