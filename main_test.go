@@ -11,6 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func init() {
+	metrics.Register()
+}
+
 func TestSubnetLookup(t *testing.T) {
 	s := new(Subnets)
 
@@ -104,13 +108,8 @@ func TestDecode(t *testing.T) {
 
 func BenchmarkDecode(b *testing.B) {
 
-	buf := new(bytes.Buffer)
-	w := gzip.NewWriter(buf)
-	w.Write(testData)
-	w.Close()
-
 	for i := 0; i < b.N; i++ {
-		decode(buf)
+		decode(bytes.NewReader(testData))
 	}
 }
 
@@ -132,6 +131,74 @@ func BenchmarkParseMessage(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ParseMessage(testInput)
 	}
+}
+
+func TestProcessFlowLog(t *testing.T) {
+
+	msg, err := decode(bytes.NewReader(testData))
+	assert.NoError(t, err)
+
+	ch := make(chan FlowMessage)
+
+	err = msg.ProcessFlowLog(ch)
+	assert.NoError(t, err)
+}
+
+func BenchmarkProcessFlowLog(b *testing.B) {
+
+	msg, _ := decode(bytes.NewReader(testData))
+
+	ch := make(chan FlowMessage)
+
+	for i := 0; i < b.N; i++ {
+		msg.ProcessFlowLog(ch)
+	}
+}
+
+func TestFull(t *testing.T) {
+	s := new(Subnets)
+	_, n, err := net.ParseCIDR("10.0.0.0/8")
+	assert.NoError(t, err)
+
+	s.networks = append(s.networks, n)
+
+	buf := new(bytes.Buffer)
+	w := gzip.NewWriter(buf)
+	w.Write(testData)
+	w.Close()
+
+	in := buf.Bytes()
+	ch := make(chan FlowMessage)
+
+	r, err := decompress(in)
+	assert.NoError(t, err)
+
+	event, err := decode(r)
+	assert.NoError(t, err)
+
+	err = event.ProcessFlowLog(ch)
+	assert.NoError(t, err)
+}
+
+func BenchmarkFull(b *testing.B) {
+	s := new(Subnets)
+	_, n, _ := net.ParseCIDR("10.0.0.0/8")
+	s.networks = append(s.networks, n)
+
+	buf := new(bytes.Buffer)
+	w := gzip.NewWriter(buf)
+	w.Write(testData)
+	w.Close()
+
+	in := buf.Bytes()
+	ch := make(chan FlowMessage)
+
+	for i := 0; i < b.N; i++ {
+		r, _ := decompress(in)
+		event, _ := decode(r)
+		event.ProcessFlowLog(ch)
+	}
+
 }
 
 var testData = []byte(`

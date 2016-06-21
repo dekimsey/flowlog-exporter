@@ -362,8 +362,6 @@ func (f FlowLogEvent) ProcessFlowLog(denyLogChan chan<- FlowMessage) error {
 			go func() {
 				denyLogChan <- msg
 			}()
-		} else {
-			close(denyLogChan)
 		}
 
 		if srcNet, ok := subnets.Lookup(msg.Src); ok {
@@ -477,7 +475,7 @@ func Log(denyLogChan <-chan FlowMessage) {
 
 }
 
-// Metrics contains prometheus metrics
+// Metrics contains prometheus metrics.
 type Metrics struct {
 	SubnetPktsIn   *prometheus.CounterVec
 	SubnetPktsOut  *prometheus.CounterVec
@@ -488,9 +486,8 @@ type Metrics struct {
 	FlowEvents     prometheus.Counter
 }
 
-// RegisterAndServe register metrics and start http server.
-func (m *Metrics) RegisterAndServe() {
-
+// Register sets up the prometheus metrics.
+func (m *Metrics) Register() {
 	m.SubnetPktsIn = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "flowlog_recieved_packets_total",
@@ -553,7 +550,10 @@ func (m *Metrics) RegisterAndServe() {
 	prometheus.MustRegister(m.SubnetAccepts)
 	prometheus.MustRegister(m.SubnetDenies)
 	prometheus.MustRegister(m.FlowEvents)
+}
 
+// Serve runs the metric webserver.
+func (m *Metrics) Serve() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
@@ -574,7 +574,7 @@ func main() {
 	}
 
 	if esURL != "" {
-
+		// Connect to elasticsearch if es_url specified.
 		log.Debugf("Connecting to Elasticsearch at %s", esURL)
 		esClient, err = elastic.NewClient(
 			elastic.SetURL(esURL),
@@ -585,6 +585,8 @@ func main() {
 		}
 		log.Debug("Connected")
 	}
+
+	metrics.Register()
 
 	// Periodically update subnet list
 	go func() {
@@ -609,7 +611,7 @@ func main() {
 		go Stream(i, gzipChan)
 	}
 
-	go metrics.RegisterAndServe()
+	go metrics.Serve()
 
 	go Log(denyLogChan)
 
