@@ -125,28 +125,41 @@ func Stream(id int, out chan<- []byte) {
 
 	log.Debugf("Starting stream reader on shard %s", shardID)
 
-	shard, err := getShardIterator(shardID)
-	if err != nil {
-		log.Error(err)
-	}
-
-	iter := shard.ShardIterator
-
 	for {
-		recs, err := getRecord(iter)
+		shard, err := getShardIterator(shardID)
 		if err != nil {
 			log.Error(err)
 		}
 
-		for i := range recs.Records {
-			if err != nil {
-				log.Error(err)
-				continue
-			}
-			out <- recs.Records[i].Data
+		iter := shard.ShardIterator
+		if iter == nil {
+			log.Errorf("No shard iterator for stream %d", id)
+			time.Sleep(30 * time.Second)
+			continue
 		}
 
-		iter = recs.NextShardIterator
+		for {
+			recs, err := getRecord(iter)
+			if err != nil {
+				log.Error(err)
+			}
+
+			for i := range recs.Records {
+				if err != nil {
+					log.Error(err)
+					continue
+				}
+				out <- recs.Records[i].Data
+			}
+
+			iter = recs.NextShardIterator
+			if iter == nil {
+				break
+			}
+
+		}
+
+		log.Warnf("Lost shard iterator on stream %d, retrying", id)
 	}
 }
 
