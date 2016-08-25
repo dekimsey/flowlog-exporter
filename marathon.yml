@@ -11,8 +11,7 @@ args: [
     "-es_index",
     "flowlogs",
     "-es_url",
-    "{{es_server}}",
-    "-debug"
+    "{{es_server}}"
     ]
 env:
     AWS_ACCESS_KEY: {{access_key}}
