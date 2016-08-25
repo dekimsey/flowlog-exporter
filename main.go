@@ -596,7 +596,7 @@ func (m *Metrics) Serve() {
 		}
 
 		if esURL != "" {
-			_, res, err := esClient.Ping().Do()
+			_, res, err := esClient.Ping().URL(esURL).Do()
 			if err != nil {
 				w.WriteHeader(500)
 				w.Write([]byte("Error attempting to ping Elasticsearch: " + err.Error()))
