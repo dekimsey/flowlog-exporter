@@ -27,18 +27,19 @@ import (
 const esType = "flowlog_denials"
 
 var (
-	awsSession  *session.Session
-	esClient    *elastic.Client
-	getSize     int64 = 256
-	esBatchSize       = 4096
-	shards      int
-	streamName  string
-	port        string
-	esURL       string
-	esIndex     string
-	logDeny     bool
-	subnets     Subnets
-	metrics     Metrics
+	awsSession    *session.Session
+	esClient      *elastic.Client
+	getSize       int64 = 256
+	esBatchSize         = 4096
+	shards        int
+	streamName    string
+	port          string
+	esURL         string
+	esIndex       string
+	logDeny       bool
+	subnets       Subnets
+	metrics       Metrics
+	streamHealthy []bool
 )
 
 func init() {
@@ -58,6 +59,8 @@ func init() {
 	if *debug {
 		log.SetLevel(log.DebugLevel)
 	}
+
+	streamHealthy = make([]bool, shards)
 }
 
 func esIndexName() string {
@@ -129,14 +132,20 @@ func Stream(id int, out chan<- []byte) {
 		shard, err := getShardIterator(shardID)
 		if err != nil {
 			log.Error(err)
+			time.Sleep(30 * time.Second)
+			streamHealthy[id] = false
+			continue
 		}
 
 		iter := shard.ShardIterator
 		if iter == nil {
 			log.Errorf("No shard iterator for stream %d", id)
 			time.Sleep(30 * time.Second)
+			streamHealthy[id] = false
 			continue
 		}
+
+		streamHealthy[id] = true
 
 		for {
 			recs, err := getRecord(iter)
@@ -147,6 +156,7 @@ func Stream(id int, out chan<- []byte) {
 			for i := range recs.Records {
 				if err != nil {
 					log.Error(err)
+					streamHealthy[id] = false
 					continue
 				}
 				out <- recs.Records[i].Data
@@ -159,6 +169,7 @@ func Stream(id int, out chan<- []byte) {
 
 		}
 
+		streamHealthy[id] = false
 		log.Warnf("Lost shard iterator on stream %d, retrying", id)
 	}
 }
@@ -568,6 +579,36 @@ func (m *Metrics) Register() {
 // Serve runs the metric webserver.
 func (m *Metrics) Serve() {
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		ok := true
+
+		for i := range streamHealthy {
+			if !streamHealthy[i] {
+				ok = false
+			}
+		}
+
+		if !ok {
+			w.WriteHeader(500)
+			w.Write([]byte("Kinesis read error"))
+			return
+		}
+
+		if esURL != "" {
+			_, res, err := esClient.Ping().Do()
+			if err != nil {
+				w.WriteHeader(500)
+				w.Write([]byte("Error attempting to ping Elasticsearch: " + err.Error()))
+				return
+			}
+			if res != 200 {
+				w.WriteHeader(500)
+				w.Write([]byte("Elasticsearch not connected"))
+				return
+			}
+		}
+
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
 	})
